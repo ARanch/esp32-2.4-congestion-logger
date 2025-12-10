@@ -43,6 +43,49 @@ struct WiFiScanResult {
     int rssiAvg;
 };
 
+// BLE scan results structure
+struct BLEScanResult {
+    int uniqueDevices;
+    int packetCount;
+    int rssiMin;
+    int rssiMax;
+    int rssiAvg;
+    int connectable;
+    int nonConnectable;
+    int scannable;
+};
+
+// Global BLE stats for callback
+BLEScanResult g_bleStats;
+
+// BLE callback to count every advertising packet
+class BLEPacketCallback : public BLEAdvertisedDeviceCallbacks {
+    void onResult(BLEAdvertisedDevice advertisedDevice) override {
+        g_bleStats.packetCount++;
+
+        int rssi = advertisedDevice.getRSSI();
+
+        // Update RSSI stats
+        if (rssi < g_bleStats.rssiMin) g_bleStats.rssiMin = rssi;
+        if (rssi > g_bleStats.rssiMax) g_bleStats.rssiMax = rssi;
+
+        // Classify by advertisement flags if available
+        // If device has service data or is connectable, classify accordingly
+        if (advertisedDevice.haveServiceData() || advertisedDevice.haveServiceUUID()) {
+            // Devices advertising services are typically connectable
+            g_bleStats.connectable++;
+        } else if (advertisedDevice.haveName()) {
+            // Named devices are usually scannable
+            g_bleStats.scannable++;
+        } else {
+            // Beacon-like devices (no name, no services) are typically non-connectable
+            g_bleStats.nonConnectable++;
+        }
+    }
+};
+
+BLEPacketCallback* bleCallback = nullptr;
+
 void initOLED() {
     // Enable Vext power for OLED (LOW = ON for Heltec V3)
     pinMode(VEXT_CTRL, OUTPUT);
@@ -60,6 +103,8 @@ void initOLED() {
 void initBLE() {
     BLEDevice::init("");
     pBLEScan = BLEDevice::getScan();
+    bleCallback = new BLEPacketCallback();
+    pBLEScan->setAdvertisedDeviceCallbacks(bleCallback, false);  // false = don't dedupe
     pBLEScan->setActiveScan(false);
     pBLEScan->setInterval(100);
     pBLEScan->setWindow(99);
@@ -97,39 +142,70 @@ WiFiScanResult performWiFiScan() {
     return result;
 }
 
-int performBLEScan() {
+BLEScanResult performBLEScan() {
+    // Reset global stats
+    g_bleStats = {0, 0, 0, -100, 0, 0, 0, 0};  // rssiMin starts high, rssiMax starts low
+
     BLEScanResults results = pBLEScan->start(BLE_SCAN_TIME_SEC, false);
-    int count = results.getCount();
+    g_bleStats.uniqueDevices = results.getCount();
+
+    // Calculate average RSSI
+    if (g_bleStats.packetCount > 0) {
+        // We need to recalculate since we only tracked min/max
+        // Let's iterate through results for average
+        int rssiSum = 0;
+        for (int i = 0; i < results.getCount(); i++) {
+            rssiSum += results.getDevice(i).getRSSI();
+        }
+        if (results.getCount() > 0) {
+            g_bleStats.rssiAvg = rssiSum / results.getCount();
+        }
+    }
+
     pBLEScan->clearResults();
-    return count;
+    return g_bleStats;
 }
 
-void updateDisplay(WiFiScanResult& wifi, int bleCount) {
+void updateDisplay(WiFiScanResult& wifi, BLEScanResult& ble) {
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_6x10_tf);
-
-    u8g2.drawStr(0, 10, "RF Environment Logger");
-    u8g2.drawLine(0, 12, 128, 12);
+    u8g2.setFont(u8g2_font_5x7_tf);  // Smaller font to fit more info
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "WiFi: %d networks", wifi.totalNetworks);
-    u8g2.drawStr(0, 24, buf);
 
-    snprintf(buf, sizeof(buf), "Ch1:%d Ch6:%d Ch11:%d",
-             wifi.ch1Count, wifi.ch6Count, wifi.ch11Count);
-    u8g2.drawStr(0, 36, buf);
+    // WiFi line
+    snprintf(buf, sizeof(buf), "WiFi:%d Ch1:%d/6:%d/11:%d",
+             wifi.totalNetworks, wifi.ch1Count, wifi.ch6Count, wifi.ch11Count);
+    u8g2.drawStr(0, 8, buf);
 
-    snprintf(buf, sizeof(buf), "BLE: %d devices", bleCount);
+    // WiFi RSSI
+    snprintf(buf, sizeof(buf), "WiFi RSSI max:%d avg:%d", wifi.rssiMax, wifi.rssiAvg);
+    u8g2.drawStr(0, 18, buf);
+
+    // BLE devices and packets
+    snprintf(buf, sizeof(buf), "BLE:%d dev %d pkt", ble.uniqueDevices, ble.packetCount);
+    u8g2.drawStr(0, 28, buf);
+
+    // BLE RSSI
+    snprintf(buf, sizeof(buf), "BLE RSSI %d/%d/%d", ble.rssiMin, ble.rssiAvg, ble.rssiMax);
+    u8g2.drawStr(0, 38, buf);
+
+    // BLE adv types
+    snprintf(buf, sizeof(buf), "Conn:%d NC:%d Scan:%d",
+             ble.connectable, ble.nonConnectable, ble.scannable);
     u8g2.drawStr(0, 48, buf);
 
-    snprintf(buf, sizeof(buf), "Scans: %lu", scanCount);
-    u8g2.drawStr(0, 60, buf);
+    // Scan count
+    snprintf(buf, sizeof(buf), "Scan #%lu", scanCount);
+    u8g2.drawStr(0, 58, buf);
 
     u8g2.sendBuffer();
 }
 
-void outputCSV(unsigned long timestamp, WiFiScanResult& wifi, int bleCount) {
-    Serial.printf("%lu,%d,%d,%d,%d,%d,%d,%d\n",
+void outputCSV(unsigned long timestamp, WiFiScanResult& wifi, BLEScanResult& ble) {
+    // Format: timestamp_ms,wifi_total,ch1,ch6,ch11,wifi_rssi_max,wifi_rssi_avg,
+    //         ble_devices,ble_packets,ble_rssi_min,ble_rssi_max,ble_rssi_avg,
+    //         ble_connectable,ble_nonconnectable,ble_scannable
+    Serial.printf("%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                   timestamp,
                   wifi.totalNetworks,
                   wifi.ch1Count,
@@ -137,7 +213,14 @@ void outputCSV(unsigned long timestamp, WiFiScanResult& wifi, int bleCount) {
                   wifi.ch11Count,
                   wifi.rssiMax,
                   wifi.rssiAvg,
-                  bleCount);
+                  ble.uniqueDevices,
+                  ble.packetCount,
+                  ble.rssiMin,
+                  ble.rssiMax,
+                  ble.rssiAvg,
+                  ble.connectable,
+                  ble.nonConnectable,
+                  ble.scannable);
 }
 
 void setup() {
@@ -158,7 +241,7 @@ void setup() {
     initBLE();
 
     Serial.println("Init complete!");
-    Serial.println("timestamp_ms,wifi_total,ch1,ch6,ch11,rssi_max,rssi_avg,ble_devices");
+    Serial.println("timestamp_ms,wifi_total,ch1,ch6,ch11,wifi_rssi_max,wifi_rssi_avg,ble_devices,ble_packets,ble_rssi_min,ble_rssi_max,ble_rssi_avg,ble_connectable,ble_nonconnectable,ble_scannable");
 
     u8g2.clearBuffer();
     u8g2.drawStr(0, 10, "RF Logger");
@@ -171,12 +254,12 @@ void loop() {
     unsigned long loopStart = millis();
 
     WiFiScanResult wifiResult = performWiFiScan();
-    int bleCount = performBLEScan();
+    BLEScanResult bleResult = performBLEScan();
 
     scanCount++;
 
-    outputCSV(loopStart, wifiResult, bleCount);
-    updateDisplay(wifiResult, bleCount);
+    outputCSV(loopStart, wifiResult, bleResult);
+    updateDisplay(wifiResult, bleResult);
 
     unsigned long elapsed = millis() - loopStart;
     if (elapsed < SCAN_INTERVAL_MS) {
