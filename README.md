@@ -1,110 +1,71 @@
-# Wireless Environment Logger
+# ESP32 2.4GHz Wireless Environment Logger
 
-Log 2.4 GHz wireless congestion at live venues using ESP32 devices.
+Logs WiFi and BLE congestion at live venues to understand RF conditions over time, and comparing congestion between venues. Calculates a **Wireless Congestion Index (WCI)** from 0-100.
+
+## Note on WCI (Wireless Congestion Index)
+
+WCI is an experimental proxy metric, not a calibrated measurement. It combines WiFi network counts, signal strength, and BLE activity into a single 0-100 score for quick comparison between environments.
+
+The current saturation points are arbitrary. Calibration is in progress using manual noise floor readings from a dedicated 2.4 GHz spectrum analyzer at real venues (concerts, trade shows). Once we have data showing how WCI correlates with actual RF conditions, the formula will be adjusted to reflect reality.
+
+Until then, treat WCI as a rough indicator—useful for spotting relative changes over time, not for absolute judgments.
+
+## What it measures
+
+- **WiFi**: Network count, per-channel breakdown (1/6/11), RSSI stats
+- **BLE**: Unique devices, total packets, RSSI distribution, advertising types
+- **WCI**: Derived congestion score combining all metrics
 
 ## Hardware
 
-- Heltec ESP32 LoRa V3 board
-- USB cable for power and serial communication
+- Heltec WiFi LoRa 32 V3 (ESP32-S3)
+- USB cable
 
-## Project Structure
+## Quick Start
 
-```
-├── firmware/           # ESP32 PlatformIO project
-│   ├── platformio.ini
-│   └── src/
-│       └── main.cpp
-├── logger.py           # Python serial logger
-└── README.md
-```
-
-## Firmware Setup
-
-### Prerequisites
-
-- [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
-
-### Build and Upload
+### Firmware
 
 ```bash
 cd firmware
 pio run --target upload
 ```
 
-Or use the PlatformIO IDE to build and upload.
-
-### What it does
-
-Every 5 seconds, the firmware:
-1. Scans for WiFi networks (counts total, per-channel for 1/6/11, RSSI stats)
-2. Scans for BLE advertising devices
-3. Outputs CSV data via serial
-4. Updates the OLED display with current stats
-
-### Serial Output Format
-
-```
-timestamp_ms,wifi_total,ch1,ch6,ch11,rssi_max,rssi_avg,ble_devices
-12345,15,5,7,3,-45,-68,23
-```
-
-## Python Logger Setup
-
-### Prerequisites
+### Logger
 
 ```bash
-pip install pyserial
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python logger.py -p /dev/cu.usbserial-0001 -n venue_name
 ```
 
-### Usage
+Output: `venue_name_2024-01-15_19-30-00.csv`
+
+Ctrl+C to stop logging.
+
+## Usage
+
+- **PRG button**: Cycle display pages (WCI / WiFi / BLE)
+- Scans every 5 seconds
+- CSV output via serial at 115200 baud
+
+## CSV Columns
+
+```
+timestamp_ms,wifi_total,ch1,ch6,ch11,wifi_rssi_max,wifi_rssi_avg,
+ble_devices,ble_packets,ble_rssi_min,ble_rssi_max,ble_rssi_avg,
+ble_connectable,ble_nonconnectable,ble_scannable,wci
+```
+
+## Find Serial Port
 
 ```bash
-python logger.py --port /dev/cu.usbserial-XXX --name venue1
-```
-
-#### Arguments
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--port`, `-p` | Yes | Serial port (e.g., `/dev/cu.usbserial-XXX` on macOS, `COM3` on Windows) |
-| `--name`, `-n` | Yes | Location/device identifier (used in filename) |
-| `--baud`, `-b` | No | Baud rate (default: 115200) |
-| `--output-dir`, `-o` | No | Directory for output files (default: current directory) |
-
-### Output
-
-Creates a CSV file named: `{name}_{date}_{time}.csv`
-
-Example: `venue1_2024-01-15_19-30-00.csv`
-
-The logger prepends an ISO timestamp to each line from the ESP32:
-
-```csv
-iso_timestamp,timestamp_ms,wifi_total,ch1,ch6,ch11,rssi_max,rssi_avg,ble_devices
-2024-01-15T19:30:05.123456,12345,15,5,7,3,-45,-68,23
-```
-
-## Finding the Serial Port
-
-### macOS
-```bash
+# macOS
 ls /dev/cu.usb*
-```
 
-### Linux
-```bash
-ls /dev/ttyUSB* /dev/ttyACM*
-```
+# Linux
+ls /dev/ttyUSB*
 
-### Windows
-Check Device Manager for COM ports, or:
-```cmd
+# Windows
 mode
 ```
-
-## Troubleshooting
-
-- **No serial output**: Ensure the correct port is selected and baud rate matches (115200)
-- **OLED not working**: Check that you're using a Heltec ESP32 LoRa V3 board (pin mappings differ between boards)
-- **BLE scan returns 0**: Some environments may have very few BLE devices; this is normal
-- **WiFi shows 0 networks**: Ensure you're in range of WiFi networks; hidden networks are included in the scan
