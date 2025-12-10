@@ -23,20 +23,20 @@ Until then, treat WCI as a rough indicator—useful for spotting relative change
 
 ## Quick Start
 
-### Firmware
-
-```bash
-cd firmware
-pio run --target upload
-```
-
-### Logger
-
 ```bash
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-python logger.py -p /dev/cu.usbserial-0001 -n venue_name
+./start.sh venue_name
+```
+
+### start.sh
+
+```bash
+./start.sh              # build + log as "test"
+./start.sh venue1       # build + log as "venue1"
+./start.sh -n           # skip build, log as "test"
+./start.sh -n venue1    # skip build, log as "venue1"
 ```
 
 Output: `venue_name_2024-01-15_19-30-00.csv`
